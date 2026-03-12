@@ -1,9 +1,9 @@
 import logging
 from dotenv import load_dotenv
 from livekit.agents import Agent, AgentSession, JobContext, WorkerOptions, cli, room_io
-from livekit.plugins import noise_cancellation, silero, sarvam, groq
+from livekit.plugins import noise_cancellation, silero, sarvam, groq, google
 from livekit.plugins.turn_detector.multilingual import MultilingualModel
-from livekit.agents import llm, RunContext
+from livekit.agents import llm, RunContext, mcp
 from livekit.agents import AgentStateChangedEvent, MetricsCollectedEvent, metrics
 from livekit.agents.llm import function_tool
 import os
@@ -17,10 +17,12 @@ class Assistant(Agent):
     def __init__(self)-> None:
         super().__init__(
             instructions=(
-                "You are an upbeat, slightly sarcastic voice AI for tech support. "
-                "Help the caller fix issues without rambling, and keep replies under 3 sentences."
-                "Use the lookup_weather tool whenever the user asks about current weather. "
-                "You can also look up the weather if asked."
+                "You are a concise voice AI for tech support. "
+                "Keep replies under 3 sentences. "
+                "Use lookup_weather for current weather questions. "
+                "For LiveKit documentation questions, use get_docs_overview for browsing, "
+                "use docs_search to find relevant pages, and use get_pages only after search "
+                "when you need the full page content before answering."
             ),
         )
 
@@ -70,15 +72,19 @@ async def entrypoint(ctx: JobContext):
 
         llm=llm.FallbackAdapter(
             [
+                google.LLM(
+                    model="gemini-2.5-flash-lite",
+                    temperature=0.3,
+                ),
                 groq.LLM(
-                    model="llama-3.1-8b",
+                    model="groq/compound",
                     temperature=0.3,
                 ),
                 groq.LLM(
                     model="llama-3.3-70b-versatile",
                     temperature=0.3,
                 ),
-            ]
+            ],attempt_timeout=15
         ),
         tts=sarvam.TTS(  
             target_language_code="en-IN",
@@ -87,7 +93,16 @@ async def entrypoint(ctx: JobContext):
         ),
         vad=silero.VAD.load(),
         turn_detection=MultilingualModel(),
-        preemptive_generation = True
+        preemptive_generation = True,
+        mcp_servers=[
+            mcp.MCPServerHTTP(
+                url="https://docs.livekit.io/mcp/",
+                transport_type="streamable_http",
+                allowed_tools=["get_docs_overview", "docs_search", "get_pages"],
+                timeout=15,
+                client_session_timeout_seconds=15,
+            ),
+        ],
     )
 
     usage_collector = metrics.UsageCollector()
